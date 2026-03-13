@@ -1,0 +1,6 @@
+[env]
+MACOSX_DEPLOYMENT_TARGET = "14.0"
+SDKROOT = "/Library/Developer/CommandLineTools/SDKs/MacOSX15.5.sdk"
+CXXFLAGS = "-mmacosx-version-min=14.0 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX15.5.sdk -I/Library/Developer/CommandLineTools/SDKs/MacOSX15.5.sdk/usr/include/c++/v1"
+CFLAGS = "-mmacosx-version-min=14.0"
+CMAKE_OSX_DEPLOYMENT_TARGET = "14.0"
