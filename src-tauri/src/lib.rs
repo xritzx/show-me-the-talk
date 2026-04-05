@@ -1,9 +1,14 @@
+mod accessibility;
 mod audio;
+mod llm;
 mod paste;
+mod settings;
 mod transcriber;
 mod tray;
 
 use audio::AudioRecorder;
+use llm::LlmEngine;
+use settings::AppSettings;
 use std::sync::Mutex;
 use tauri::{Emitter, Manager};
 use tauri_plugin_clipboard_manager::ClipboardExt;
@@ -13,6 +18,25 @@ use transcriber::Transcriber;
 struct AppState {
     recorder: Mutex<AudioRecorder>,
     transcriber: Mutex<Option<Transcriber>>,
+    llm_engine: Mutex<Option<LlmEngine>>,
+    settings: Mutex<AppSettings>,
+}
+
+#[tauri::command]
+fn check_accessibility() -> bool {
+    accessibility::is_trusted()
+}
+
+#[tauri::command]
+fn get_settings(state: tauri::State<'_, AppState>) -> AppSettings {
+    state.settings.lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn set_settings(state: tauri::State<'_, AppState>, updated: AppSettings) -> Result<(), String> {
+    settings::save_settings(&updated)?;
+    *state.settings.lock().unwrap() = updated;
+    Ok(())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -22,7 +46,14 @@ pub fn run() {
         .manage(AppState {
             recorder: Mutex::new(AudioRecorder::new()),
             transcriber: Mutex::new(None),
+            llm_engine: Mutex::new(None),
+            settings: Mutex::new(settings::load_settings()),
         })
+        .invoke_handler(tauri::generate_handler![
+            check_accessibility,
+            get_settings,
+            set_settings
+        ])
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -30,6 +61,11 @@ pub fn run() {
                         .level(log::LevelFilter::Info)
                         .build(),
                 )?;
+            }
+
+            if !accessibility::is_trusted() {
+                log::info!("Accessibility permission not granted, prompting user");
+                accessibility::prompt_for_trust();
             }
 
             tray::setup_tray(app.handle())?;
@@ -44,6 +80,21 @@ pub fn run() {
                 }
                 Err(e) => {
                     log::error!("Failed to load whisper model: {}", e);
+                }
+            }
+
+            match llm::resolve_bundled_llm_model(app.handle()) {
+                Ok(llm_path) => match LlmEngine::new(&llm_path) {
+                    Ok(engine) => {
+                        *state.llm_engine.lock().unwrap() = Some(engine);
+                        log::info!("LLM engine loaded successfully");
+                    }
+                    Err(e) => {
+                        log::error!("Failed to load LLM engine: {}", e);
+                    }
+                },
+                Err(e) => {
+                    log::warn!("LLM model not found, AI refinement disabled: {}", e);
                 }
             }
 
@@ -163,48 +214,79 @@ fn run_transcription(handle: tauri::AppHandle, wav_path: std::path::PathBuf) {
         }
     };
 
-    match transcriber_ref.transcribe(&samples) {
-        Ok(text) => {
-            let _ = std::fs::remove_file(&wav_path);
-
-            if text.is_empty() {
-                let _ = handle.emit("transcription-error", "No speech detected".to_string());
-                return;
-            }
-
-            log::info!("Transcription: {}", text);
-
-            if let Err(e) = handle.clipboard().write_text(&text) {
-                log::error!("Failed to copy to clipboard: {}", e);
-                let _ = handle.emit(
-                    "transcription-error",
-                    format!("Clipboard error: {}", e),
-                );
-                return;
-            }
-
-            std::thread::sleep(std::time::Duration::from_millis(100));
-
-            if let Err(e) = paste::simulate_paste() {
-                log::error!("Failed to simulate paste: {}", e);
-                let _ = handle.emit(
-                    "transcription-error",
-                    format!("Paste error: {} (text copied to clipboard)", e),
-                );
-                return;
-            }
-
-            #[derive(Clone, serde::Serialize)]
-            struct TranscriptionResult {
-                text: String,
-            }
-
-            let _ = handle.emit("transcription-result", TranscriptionResult { text });
-        }
+    let raw_text = match transcriber_ref.transcribe(&samples) {
+        Ok(text) => text,
         Err(e) => {
             let _ = std::fs::remove_file(&wav_path);
             log::error!("Transcription failed: {}", e);
             let _ = handle.emit("transcription-error", format!("Transcription failed: {}", e));
+            return;
         }
+    };
+
+    drop(transcriber_guard);
+    let _ = std::fs::remove_file(&wav_path);
+
+    if raw_text.is_empty() {
+        let _ = handle.emit("transcription-error", "No speech detected".to_string());
+        return;
     }
+
+    log::info!("Transcription: {}", raw_text);
+
+    let current_settings = state.settings.lock().unwrap().clone();
+    let refined_text = if current_settings.llm_enabled {
+        let llm_guard = state.llm_engine.lock().unwrap();
+        if let Some(engine) = llm_guard.as_ref() {
+            let _ = handle.emit("llm-processing", ());
+            match engine.rewrite_transcript(&raw_text, current_settings.include_sql_instructions) {
+                Ok(refined) => {
+                    log::info!("LLM refined: {}", refined);
+                    Some(refined)
+                }
+                Err(e) => {
+                    log::error!("LLM refinement failed, using raw text: {}", e);
+                    None
+                }
+            }
+        } else {
+            log::warn!("LLM enabled but engine not loaded, using raw text");
+            None
+        }
+    } else {
+        None
+    };
+
+    let paste_text = refined_text.as_deref().unwrap_or(&raw_text);
+
+    if let Err(e) = handle.clipboard().write_text(paste_text) {
+        log::error!("Failed to copy to clipboard: {}", e);
+        let _ = handle.emit("transcription-error", format!("Clipboard error: {}", e));
+        return;
+    }
+
+    std::thread::sleep(std::time::Duration::from_millis(100));
+
+    if let Err(e) = paste::simulate_paste() {
+        log::error!("Failed to simulate paste: {}", e);
+        let _ = handle.emit(
+            "transcription-error",
+            format!("Paste error: {} (text copied to clipboard)", e),
+        );
+        return;
+    }
+
+    #[derive(Clone, serde::Serialize)]
+    struct TranscriptionResult {
+        raw: String,
+        refined: Option<String>,
+    }
+
+    let _ = handle.emit(
+        "transcription-result",
+        TranscriptionResult {
+            raw: raw_text,
+            refined: refined_text,
+        },
+    );
 }

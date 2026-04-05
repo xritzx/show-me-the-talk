@@ -10,6 +10,7 @@
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
     "download:model": "mkdir -p src-tauri/models && curl -L -o src-tauri/models/ggml-base.en.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin",
+    "download:llm": "mkdir -p src-tauri/models && curl -L -o src-tauri/models/Qwen2.5-1.5B-Instruct-Q4_0.gguf https://huggingface.co/bartowski/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/Qwen2.5-1.5B-Instruct-Q4_0.gguf",
     "preview": "vite preview"
   },
   "dependencies": {

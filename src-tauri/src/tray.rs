@@ -1,15 +1,21 @@
 use tauri::{
+    image::Image,
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Manager,
 };
 
+const TRAY_ICON_BYTES: &[u8] = include_bytes!("../icons/tray-icon.png");
+
 pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&quit])?;
 
+    let tray_icon = Image::from_bytes(TRAY_ICON_BYTES)
+        .expect("Failed to load tray icon");
+
     TrayIconBuilder::new()
-        .icon(app.default_window_icon().cloned().unwrap())
+        .icon(tray_icon)
         .icon_as_template(true)
         .tooltip("Show Me The Talk")
         .menu(&menu)

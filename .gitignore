@@ -4,3 +4,4 @@ src-tauri/target/
 *.log
 .DS_Store
 src-tauri/models/ggml-base.en.bin
+src-tauri/models/*.gguf
