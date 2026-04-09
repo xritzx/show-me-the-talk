@@ -38,10 +38,13 @@ impl LlmEngine {
     }
 
     pub fn rewrite_transcript(&self, input: &str, include_sql: bool) -> Result<String, String> {
-        let prompt = build_prompt(input, include_sql);
+        self.generate(&build_prompt(input, include_sql))
+    }
+
+    fn generate(&self, prompt: &str) -> Result<String, String> {
         let tokens = self
             .model
-            .str_to_token(&prompt, AddBos::Always)
+            .str_to_token(prompt, AddBos::Always)
             .map_err(|e| format!("Tokenization failed: {}", e))?;
         let n_prompt = tokens.len() as i32;
         let n_ctx = n_prompt + MAX_TOKENS;
@@ -103,9 +106,9 @@ Rewrite the given text with the following strict rules:\n\
 - Preserve EXACT meaning\n\
 - Do NOT answer questions\n\
 - Do NOT explain anything\n\
-- Output must be clean and minimal (like Whisper transcription)\n\
 - No extra commentary, prefixes, or suffixes\n\
 - Use paragraphs or bullet points ONLY if necessary\n\
+- User can optionally direct you to to format the text in a specific way at the end of the input.
 If rewriting is not possible, return the original text exactly.\n\
 {sql_block}\n\
 <|im_end|>\n\

@@ -1,5 +1,6 @@
 mod accessibility;
 mod audio;
+mod clipboard_restore;
 mod llm;
 mod paste;
 mod settings;
@@ -256,12 +257,14 @@ fn run_transcription(handle: tauri::AppHandle, wav_path: std::path::PathBuf) {
     } else {
         None
     };
-
     let paste_text = refined_text.as_deref().unwrap_or(&raw_text);
+
+    let clipboard_snapshot = clipboard_restore::snapshot_text_clipboard(&handle);
 
     if let Err(e) = handle.clipboard().write_text(paste_text) {
         log::error!("Failed to copy to clipboard: {}", e);
         let _ = handle.emit("transcription-error", format!("Clipboard error: {}", e));
+        clipboard_restore::restore_text_clipboard(&handle, &clipboard_snapshot);
         return;
     }
 
@@ -273,8 +276,12 @@ fn run_transcription(handle: tauri::AppHandle, wav_path: std::path::PathBuf) {
             "transcription-error",
             format!("Paste error: {} (text copied to clipboard)", e),
         );
+        clipboard_restore::restore_text_clipboard(&handle, &clipboard_snapshot);
         return;
     }
+
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    clipboard_restore::restore_text_clipboard(&handle, &clipboard_snapshot);
 
     #[derive(Clone, serde::Serialize)]
     struct TranscriptionResult {
